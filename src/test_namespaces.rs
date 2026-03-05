@@ -2,8 +2,8 @@
 
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events as _},
-    token, vec, Address, Env, IntoVal, Symbol,
+    testutils::Address as _,
+    Address, Env,
 };
 use crate::{
     RevoraRevenueShare, RevoraRevenueShareClient,
@@ -41,8 +41,6 @@ fn test_namespace_isolation() {
     assert_eq!(client.get_holder_share(&issuer_a, &ns_1, &token, &holder), 500);
     assert_eq!(client.get_holder_share(&issuer_b, &ns_2, &token, &holder), 1500);
 
-    // Deposit revenue in ns1
-    let amount_a = 100_000i128;
     // We need to manage the token (mint some to the issuer)
     // Actually, in mock_all_auths, the transfer will succeed if we don't check balances? 
     // No, soroban-sdk mock_all_auths doesn't mock balances.

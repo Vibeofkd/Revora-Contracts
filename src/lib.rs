@@ -537,7 +537,6 @@ impl RevoraRevenueShare {
     ///
     /// ### Panics
     /// Panics if the contract has already been initialized.
-
     /// Get the current issuer for an offering token (used for auth checks after transfers).
     fn get_current_issuer(env: &Env, issuer: Address, namespace: Symbol, token: Address) -> Option<Address> {
         let offering_id = OfferingId { issuer, namespace, token };
@@ -650,7 +649,6 @@ impl RevoraRevenueShare {
     // ── Offering management ───────────────────────────────────
 
     /// Register a new revenue-share offering.
-
     ///
     /// Once registered, an offering's parameters are immutable.
     ///
@@ -663,10 +661,10 @@ impl RevoraRevenueShare {
     /// - `Ok(())` on success.
     /// - `Err(RevoraError::InvalidRevenueShareBps)` if `revenue_share_bps` exceeds 10000.
     /// - `Err(RevoraError::ContractFrozen)` if the contract is frozen.
-
+    ///
     /// Returns `Err(RevoraError::InvalidRevenueShareBps)` if revenue_share_bps > 10000.
     /// In testnet mode, bps validation is skipped to allow flexible testing.
-
+    ///
     /// Register a new offering. `supply_cap`: max cumulative deposited revenue for this offering; 0 = no cap (#96).
     pub fn register_offering(
         env: Env,
@@ -819,6 +817,7 @@ impl RevoraRevenueShare {
 
 
     /// Record a revenue report for an offering; updates audit summary and emits events.
+    #[allow(clippy::too_many_arguments)]
     pub fn report_revenue(
         env: Env,
         issuer: Address,
@@ -1691,11 +1690,8 @@ impl RevoraRevenueShare {
         Self::do_deposit_revenue(&env, issuer, namespace, token, payment_token, amount, period_id)
     }
 
-    /// Deposit revenue for an offering using a specific snapshot reference.
-    ///
-    /// Requires that snapshot distribution is enabled for the offering.
-    /// The `snapshot_reference` (e.g., ledger sequence) must be strictly greater than
     /// any previously recorded snapshot for this offering to prevent duplication.
+    #[allow(clippy::too_many_arguments)]
     pub fn deposit_revenue_with_snapshot(
         env: Env,
         issuer: Address,

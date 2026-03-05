@@ -1,13 +1,12 @@
-#![cfg(test)]
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     Address, Env,
 };
 
-use crate::vesting::{RevoraVesting, RevoraVestingClient, VestingError};
+use crate::vesting::{RevoraVesting, RevoraVestingClient};
 
-fn setup(env: &Env) -> (RevoraVestingClient, Address, Address, Address) {
+fn setup(env: &Env) -> (RevoraVestingClient<'_>, Address, Address, Address) {
     let contract_id = env.register_contract(None, RevoraVesting);
     let client = RevoraVestingClient::new(env, &contract_id);
     let admin = Address::generate(env);
