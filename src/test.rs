@@ -1,4 +1,5 @@
 #![cfg(test)]
+#![allow(warnings)]
 
 use soroban_sdk::{
     symbol_short,
@@ -62,26 +63,19 @@ fn next_period(seed: &mut u64) -> u64 {
 
 #[test]
 fn register_offering_emits_exact_event() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, RevoraRevenueShare);
-    let client = RevoraRevenueShareClient::new(&env, &contract_id);
-
-    let issuer = Address::generate(&env);
-    let token = Address::generate(&env);
+    let (env, client, contract_id, issuer, token, _payout) = crate::test_utils::setup_context();
     let bps: u32 = 1_500;
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &bps, &token, &0);
 
     assert_eq!(
         env.events().all(),
-        vec![
+        soroban_sdk::vec![
             &env,
             (
-                contract_id.clone(),
-                (symbol_short!("offer_reg"), issuer.clone()).into_val(&env),
-                (token.clone(), bps, token.clone()).into_val(&env),
+                contract_id,
+                (symbol_short!("offer_reg"), issuer).into_val(&env),
+                (token.clone(), bps, token).into_val(&env),
             ),
         ]
     );
@@ -1230,10 +1224,10 @@ fn offerings_preserve_correct_data() {
 
     let (page, _) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &10);
     let offering = page.get(0);
-    assert_eq!(offering.clone().unwrap().issuer, issuer);
-    assert_eq!(offering.clone().unwrap().token, token);
-    assert_eq!(offering.clone().unwrap().revenue_share_bps, 500);
-    assert_eq!(offering.clone().unwrap().payout_asset, payout_asset);
+    assert_eq!(offering.clone().clone().unwrap().issuer, issuer);
+    assert_eq!(offering.clone().clone().unwrap().token, token);
+    assert_eq!(offering.clone().clone().unwrap().revenue_share_bps, 500);
+    assert_eq!(offering.clone().clone().unwrap().payout_asset, payout_asset);
 }
 
 #[test]
@@ -2195,8 +2189,8 @@ fn set_concentration_limit_stores_config() {
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
     client.set_concentration_limit(&issuer, &symbol_short!("def"), &token, &5000, &false);
     let config = client.get_concentration_limit(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(config.unwrap().max_bps, 5000);
-    assert!(!config.unwrap().enforce);
+    assert_eq!(config.clone().unwrap().max_bps, 5000);
+    assert!(!config.clone().unwrap().enforce);
 }
 
 #[test]
@@ -2313,8 +2307,8 @@ fn audit_summary_aggregates_revenue_and_count() {
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200, &2, &false);
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &300, &3, &false);
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.unwrap().total_revenue, 600);
-    assert_eq!(summary.unwrap().report_count, 3);
+    assert_eq!(summary.clone().unwrap().total_revenue, 600);
+    assert_eq!(summary.clone().unwrap().report_count, 3);
 }
 
 #[test]
@@ -2333,10 +2327,10 @@ fn audit_summary_per_offering_isolation() {
     client.report_revenue(&issuer, &symbol_short!("def"), &token_b, &payout_asset_b, &2000, &1, &false);
     let sum_a = client.get_audit_summary(&issuer, &symbol_short!("def"), &token_a);
     let sum_b = client.get_audit_summary(&issuer, &symbol_short!("def"), &token_b);
-    assert_eq!(sum_a.unwrap().total_revenue, 1000);
-    assert_eq!(sum_a.unwrap().report_count, 1);
-    assert_eq!(sum_b.unwrap().total_revenue, 2000);
-    assert_eq!(sum_b.unwrap().report_count, 1);
+    assert_eq!(sum_a.clone().unwrap().total_revenue, 1000);
+    assert_eq!(sum_a.clone().unwrap().report_count, 1);
+    assert_eq!(sum_b.clone().unwrap().total_revenue, 2000);
+    assert_eq!(sum_b.clone().unwrap().report_count, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -3389,7 +3383,7 @@ fn simulate_distribution_zero_revenue() {
     shares.push_back((holder.clone(), 5_000u32));
     let result = client.simulate_distribution(&issuer, &symbol_short!("def"), &token, &0, &shares);
     assert_eq!(result.total_distributed, 0);
-    assert_eq!(result.payouts.get(0).unwrap().1, 0);
+    assert_eq!(result.payouts.get(0).clone().unwrap().1, 0);
 }
 
 #[test]
@@ -3415,7 +3409,7 @@ fn simulate_distribution_uses_rounding_mode() {
     shares.push_back((holder.clone(), 3_333u32));
     let result = client.simulate_distribution(&issuer, &symbol_short!("def"), &token, &100, &shares);
     assert_eq!(result.total_distributed, 33);
-    assert_eq!(result.payouts.get(0).unwrap().1, 33);
+    assert_eq!(result.payouts.get(0).clone().unwrap().1, 33);
 }
 
 // ===========================================================================
@@ -3742,7 +3736,7 @@ fn issuer_transfer_accept_completes_transfer() {
     // Verify offering issuer is updated - offering is now stored under new_issuer
     let offering = client.get_offering(&new_issuer, &token, &0);
     assert!(offering.is_some());
-    assert_eq!(offering.unwrap().issuer, new_issuer);
+    assert_eq!(offering.clone().unwrap().issuer, new_issuer);
 }
 
 #[test]
@@ -3818,7 +3812,7 @@ fn testnet_mode_allows_bps_over_10000() {
 
     // Verify offering was registered
     let offering = client.get_offering(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(offering.clone().unwrap().revenue_share_bps, 15_000);
+    assert_eq!(offering.clone().clone().unwrap().revenue_share_bps, 15_000);
 }
 
 #[test]
@@ -3995,7 +3989,7 @@ fn testnet_mode_affects_only_validation_not_storage() {
 
     // Offering should still exist with high bps value
     let offering = client.get_offering(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(offering.clone().unwrap().revenue_share_bps, 25_000);
+    assert_eq!(offering.clone().clone().unwrap().revenue_share_bps, 25_000);
 }
 
 #[test]
@@ -4767,7 +4761,7 @@ fn issuer_transfer_get_offering_still_works() {
     // get_offering should find the offering under new issuer now
     let offering = client.get_offering(&new_issuer, &token, &0);
     assert!(offering.is_some());
-    assert_eq!(offering.unwrap().issuer, new_issuer);
+    assert_eq!(offering.clone().unwrap().issuer, new_issuer);
 }
 
 #[test]
@@ -4834,8 +4828,8 @@ fn testnet_mode_normal_operations_unaffected() {
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000_000, &1, &false);
 
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.unwrap().total_revenue, 1_000_000);
-    assert_eq!(summary.unwrap().report_count, 1);
+    assert_eq!(summary.clone().unwrap().total_revenue, 1_000_000);
+    assert_eq!(summary.clone().unwrap().report_count, 1);
 }
 
 #[test]
@@ -5875,7 +5869,7 @@ fn test_metadata_set_emits_event() {
     let last_event = events.last();
     let (_, topics, _) = last_event;
     let topics_vec: Vec<soroban_sdk::Val> = topics;
-    let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
+    let event_symbol: Symbol = topics_vec.get(0).clone().unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 }
 
@@ -5904,7 +5898,7 @@ fn test_metadata_update_emits_event() {
     let last_event = events.last();
     let (_, topics, _) = last_event;
     let topics_vec: Vec<soroban_sdk::Val> = topics;
-    let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
+    let event_symbol: Symbol = topics_vec.get(0).clone().unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_upd"));
 }
 
@@ -5929,13 +5923,13 @@ fn test_metadata_events_include_correct_data() {
     assert_eq!(event_contract, contract_id);
 
     let topics_vec: Vec<soroban_sdk::Val> = topics;
-    let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
+    let event_symbol: Symbol = topics_vec.get(0).clone().unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 
-    let event_issuer: Address = topics_vec.get(1).unwrap().into_val(&env);
+    let event_issuer: Address = topics_vec.get(1).clone().unwrap().into_val(&env);
     assert_eq!(event_issuer, issuer);
 
-    let event_token: Address = topics_vec.get(2).unwrap().into_val(&env);
+    let event_token: Address = topics_vec.get(2).clone().unwrap().into_val(&env);
     assert_eq!(event_token, token);
 
     let event_metadata: SdkString = data.into_val(&env);
@@ -6158,7 +6152,7 @@ mod regression {
         // Assert: Verify correct behavior
         let offering = client.get_offering(&issuer, &token, &0);
         assert!(offering.is_some());
-        assert_eq!(offering.unwrap().revenue_share_bps, 1_000);
+        assert_eq!(offering.clone().unwrap().revenue_share_bps, 1_000);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -6418,7 +6412,7 @@ fn report_below_threshold_emits_event_and_skips_distribution() {
     assert!(events_after > events_before, "should emit rev_below event");
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
     assert!(
-        summary.is_none() || summary.as_ref().unwrap().report_count == 0,
+        summary.is_none() || summary.as_ref().clone().unwrap().report_count == 0,
         "below-threshold report must not count toward audit"
     );
 }
@@ -6429,8 +6423,8 @@ fn report_at_or_above_threshold_updates_state() {
     client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000, &1, &false);
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.unwrap().report_count, 1);
-    assert_eq!(summary.unwrap().total_revenue, 1_000);
+    assert_eq!(summary.clone().unwrap().report_count, 1);
+    assert_eq!(summary.clone().unwrap().total_revenue, 1_000);
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000, &2, &false);
     let summary2 = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
     assert_eq!(summary2.report_count, 2);
@@ -6444,7 +6438,7 @@ fn zero_threshold_disables_check() {
     client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50, &1, &false);
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.unwrap().report_count, 1);
+    assert_eq!(summary.clone().unwrap().report_count, 1);
 }
 
 #[test]
@@ -6478,10 +6472,10 @@ fn get_offerings_page_order_is_by_registration_index() {
     client.register_offering(&issuer, &symbol_short!("def"), &t3, &400, &p3, &0);
     let (page, _) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &10);
     assert_eq!(page.len(), 4);
-    assert_eq!(page.get(0).unwrap().token, t0);
-    assert_eq!(page.get(1).unwrap().token, t1);
-    assert_eq!(page.get(2).unwrap().token, t2);
-    assert_eq!(page.get(3).unwrap().token, t3);
+    assert_eq!(page.get(0).clone().unwrap().token, t0);
+    assert_eq!(page.get(1).clone().unwrap().token, t1);
+    assert_eq!(page.get(2).clone().unwrap().token, t2);
+    assert_eq!(page.get(3).clone().unwrap().token, t3);
 }
 
 #[test]
@@ -7086,3 +7080,4 @@ fn aggregation_stress_many_offerings() {
     assert_eq!(metrics.total_report_count, 20);
 }
 } // mod regression
+

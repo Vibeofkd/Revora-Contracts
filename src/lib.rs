@@ -2961,6 +2961,9 @@ pub mod vesting;
 #[cfg(test)]
 mod vesting_test;
 
+#[cfg(test)]
+mod test_utils;
+
 mod test;
 mod test_auth;
 mod test_cross_contract;
