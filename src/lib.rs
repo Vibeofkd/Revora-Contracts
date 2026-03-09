@@ -151,6 +151,13 @@ const EVENT_SUPPLY_CAP_REACHED: Symbol = symbol_short!("cap_reach");
 const EVENT_INV_CONSTRAINTS: Symbol = symbol_short!("inv_cfg");
 /// Emitted when per-offering or platform per-asset fee is set (#98).
 const EVENT_FEE_CONFIG: Symbol = symbol_short!("fee_cfg");
+const EVENT_INDEXED_V2: Symbol = symbol_short!("ev_idx2");
+const EVENT_TYPE_OFFER: Symbol = symbol_short!("offer");
+const EVENT_TYPE_REV_INIT: Symbol = symbol_short!("rv_init");
+const EVENT_TYPE_REV_OVR: Symbol = symbol_short!("rv_ovr");
+const EVENT_TYPE_REV_REJ: Symbol = symbol_short!("rv_rej");
+const EVENT_TYPE_REV_REP: Symbol = symbol_short!("rv_rep");
+const EVENT_TYPE_CLAIM: Symbol = symbol_short!("claim");
 
 const BPS_DENOMINATOR: i128 = 10_000;
 
@@ -239,6 +246,19 @@ pub struct SimulateDistributionResult {
     pub total_distributed: i128,
     /// Payout per holder (holder address, amount).
     pub payouts: Vec<(Address, i128)>,
+}
+
+/// Versioned structured topic payload for indexers.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventIndexTopicV2 {
+    pub version: u32,
+    pub event_type: Symbol,
+    pub issuer: Address,
+    pub namespace: Symbol,
+    pub token: Address,
+    /// 0 when the event is not period-scoped.
+    pub period_id: u64,
 }
 
 /// Defines how fractional shares are handled during distribution calculations.
@@ -753,6 +773,20 @@ impl RevoraRevenueShare {
             (symbol_short!("offer_reg"), issuer.clone(), namespace.clone()),
             (token.clone(), revenue_share_bps, payout_asset.clone()),
         );
+        env.events().publish(
+            (
+                EVENT_INDEXED_V2,
+                EventIndexTopicV2 {
+                    version: 2,
+                    event_type: EVENT_TYPE_OFFER,
+                    issuer: issuer.clone(),
+                    namespace: namespace.clone(),
+                    token: token.clone(),
+                    period_id: 0,
+                },
+            ),
+            (revenue_share_bps, payout_asset.clone()),
+        );
 
         // Optionally emit a versioned v1 event with explicit version field
         if Self::is_event_versioning_enabled(env.clone()) {
@@ -909,6 +943,20 @@ impl RevoraRevenueShare {
                             (EVENT_REVENUE_REPORT_OVERRIDE, issuer.clone(), namespace.clone(), token.clone()),
                             (amount, period_id, existing_amount, blacklist.clone()),
                         );
+                        env.events().publish(
+                            (
+                                EVENT_INDEXED_V2,
+                                EventIndexTopicV2 {
+                                    version: 2,
+                                    event_type: EVENT_TYPE_REV_OVR,
+                                    issuer: issuer.clone(),
+                                    namespace: namespace.clone(),
+                                    token: token.clone(),
+                                    period_id,
+                                },
+                            ),
+                            (amount, existing_amount, payout_asset.clone()),
+                        );
 
                         env.events().publish(
                             (
@@ -923,6 +971,20 @@ impl RevoraRevenueShare {
                         env.events().publish(
                             (EVENT_REVENUE_REPORT_REJECTED, issuer.clone(), namespace.clone(), token.clone()),
                             (amount, period_id, existing_amount, blacklist.clone()),
+                        );
+                        env.events().publish(
+                            (
+                                EVENT_INDEXED_V2,
+                                EventIndexTopicV2 {
+                                    version: 2,
+                                    event_type: EVENT_TYPE_REV_REJ,
+                                    issuer: issuer.clone(),
+                                    namespace: namespace.clone(),
+                                    token: token.clone(),
+                                    period_id,
+                                },
+                            ),
+                            (amount, existing_amount, payout_asset.clone()),
                         );
 
                         env.events().publish(
@@ -950,6 +1012,20 @@ impl RevoraRevenueShare {
                         (EVENT_REVENUE_REPORT_INITIAL, issuer.clone(), namespace.clone(), token.clone()),
                         (amount, period_id, blacklist.clone()),
                     );
+                    env.events().publish(
+                        (
+                            EVENT_INDEXED_V2,
+                            EventIndexTopicV2 {
+                                version: 2,
+                                event_type: EVENT_TYPE_REV_INIT,
+                                issuer: issuer.clone(),
+                                namespace: namespace.clone(),
+                                token: token.clone(),
+                                period_id,
+                            },
+                        ),
+                        (amount, payout_asset.clone()),
+                    );
 
                     env.events().publish(
                         (
@@ -972,6 +1048,20 @@ impl RevoraRevenueShare {
         env.events().publish(
             (EVENT_REVENUE_REPORTED, issuer.clone(), namespace.clone(), token.clone()),
             (amount, period_id, blacklist.clone()),
+        );
+        env.events().publish(
+            (
+                EVENT_INDEXED_V2,
+                EventIndexTopicV2 {
+                    version: 2,
+                    event_type: EVENT_TYPE_REV_REP,
+                    issuer: issuer.clone(),
+                    namespace: namespace.clone(),
+                    token: token.clone(),
+                    period_id,
+                },
+            ),
+            (amount, payout_asset.clone(), override_existing),
         );
 
         env.events().publish(
@@ -1929,8 +2019,27 @@ impl RevoraRevenueShare {
         env.storage().persistent().set(&idx_key, &last_claimed_idx);
 
         env.events().publish(
-            (EVENT_CLAIM, offering_id.issuer, offering_id.namespace, offering_id.token),
+            (
+                EVENT_CLAIM,
+                offering_id.issuer.clone(),
+                offering_id.namespace.clone(),
+                offering_id.token.clone(),
+            ),
             (holder, total_payout, claimed_periods),
+        );
+        env.events().publish(
+            (
+                EVENT_INDEXED_V2,
+                EventIndexTopicV2 {
+                    version: 2,
+                    event_type: EVENT_TYPE_CLAIM,
+                    issuer: offering_id.issuer,
+                    namespace: offering_id.namespace,
+                    token: offering_id.token,
+                    period_id: 0,
+                },
+            ),
+            (total_payout,),
         );
 
         Ok(total_payout)
