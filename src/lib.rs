@@ -545,6 +545,8 @@ impl RevoraRevenueShare {
                 return Err(RevoraError::ClaimWindowClosed);
             }
         }
+        Ok(())
+    }
 
     fn mark_meta_nonce_used(env: &Env, signer: &Address, nonce: u64) {
         let nonce_key = MetaDataKey::NonceUsed(signer.clone(), nonce);
