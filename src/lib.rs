@@ -962,14 +962,6 @@ impl RevoraRevenueShare {
         Ok(())
     }
 
-    /// Input validation (#35): require amount >= 0 for reporting (allow zero revenue report).
-    fn require_non_negative_amount(amount: i128) -> Result<(), RevoraError> {
-        if amount < 0 {
-            return Err(RevoraError::InvalidAmount);
-        }
-        Ok(())
-    }
-
     /// Initialize the contract with an admin and an optional safety role.
     ///
     /// This method follows the singleton pattern and can only be called once.
