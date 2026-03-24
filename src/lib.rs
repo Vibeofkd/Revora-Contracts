@@ -180,6 +180,9 @@ const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
 
+/// Current schema for `EVENT_INDEXED_V2` topics.
+const INDEXER_EVENT_SCHEMA_VERSION: u32 = 2;
+
 const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Represents a revenue-share offering registered on-chain.
@@ -3983,6 +3986,82 @@ impl RevoraRevenueShare {
         let _ = env;
         CONTRACT_VERSION
     }
+
+    /// Exposes canonical security/schema markers for documentation parity checks (#194).
+    pub fn get_security_doc_sync(env: Env) -> Map<Symbol, u32> {
+        let mut out = Map::new(&env);
+        out.set(symbol_short!("ver"), CONTRACT_VERSION);
+        out.set(symbol_short!("ev_sch"), EVENT_SCHEMA_VERSION);
+        out.set(symbol_short!("idx_sch"), INDEXER_EVENT_SCHEMA_VERSION);
+        out.set(symbol_short!("err_xfer"), RevoraError::TransferFailed as u32);
+        out.set(symbol_short!("err_auth"), RevoraError::NotAuthorized as u32);
+        out.set(symbol_short!("err_sig"), RevoraError::SignatureReplay as u32);
+        out
+    }
+
+    /// Deterministic fixture payloads for indexer integration tests (#187).
+    ///
+    /// Returns canonical v2 indexed topics in a stable order so indexers can
+    /// validate decoding, routing and storage schemas without replaying full
+    /// contract flows.
+    pub fn get_indexer_fixture_topics(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        period_id: u64,
+    ) -> Vec<EventIndexTopicV2> {
+        let mut fixtures = Vec::new(&env);
+        fixtures.push_back(EventIndexTopicV2 {
+            version: 2,
+            event_type: EVENT_TYPE_OFFER,
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+            period_id: 0,
+        });
+        fixtures.push_back(EventIndexTopicV2 {
+            version: 2,
+            event_type: EVENT_TYPE_REV_INIT,
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+            period_id,
+        });
+        fixtures.push_back(EventIndexTopicV2 {
+            version: 2,
+            event_type: EVENT_TYPE_REV_OVR,
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+            period_id,
+        });
+        fixtures.push_back(EventIndexTopicV2 {
+            version: 2,
+            event_type: EVENT_TYPE_REV_REJ,
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+            period_id,
+        });
+        fixtures.push_back(EventIndexTopicV2 {
+            version: 2,
+            event_type: EVENT_TYPE_REV_REP,
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+            period_id,
+        });
+        fixtures.push_back(EventIndexTopicV2 {
+            version: 2,
+            event_type: EVENT_TYPE_CLAIM,
+            issuer,
+            namespace,
+            token,
+            period_id: 0,
+        });
+        fixtures
+    }
 }
 
 pub mod vesting;
@@ -3997,4 +4076,8 @@ mod chunking_tests;
 mod test;
 mod test_auth;
 mod test_cross_contract;
+#[cfg(test)]
+mod test_indexer_fixtures;
+#[cfg(test)]
+mod test_security_doc_sync;
 mod test_namespaces;
