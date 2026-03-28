@@ -1518,15 +1518,18 @@ impl RevoraRevenueShare {
         );
 
         // Audit log summary (#34): maintain per-offering total revenue and report count
-        let summary_key = DataKey::AuditSummary(offering_id.clone());
-        let mut summary: AuditSummary = env
-            .storage()
-            .persistent()
-            .get(&summary_key)
-            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-        summary.total_revenue = summary.total_revenue.saturating_add(amount);
-        summary.report_count = summary.report_count.saturating_add(1);
-        env.storage().persistent().set(&summary_key, &summary);
+        // only for persisted reports. Event-only mode should not mutate summary state.
+        if !event_only {
+            let summary_key = DataKey::AuditSummary(offering_id.clone());
+            let mut summary: AuditSummary = env
+                .storage()
+                .persistent()
+                .get(&summary_key)
+                .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
+            summary.total_revenue = summary.total_revenue.saturating_add(amount);
+            summary.report_count = summary.report_count.saturating_add(1);
+            env.storage().persistent().set(&summary_key, &summary);
+        }
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -1548,19 +1551,6 @@ impl RevoraRevenueShare {
                 (EVENT_REV_REPA_V1, issuer.clone(), namespace.clone(), token.clone()),
                 (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id),
             );
-        }
-
-        if !event_only {
-            // Audit log summary (#34): maintain per-offering total revenue and report count
-            let summary_key = DataKey::AuditSummary(offering_id);
-            let mut summary: AuditSummary = env
-                .storage()
-                .persistent()
-                .get(&summary_key)
-                .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-            summary.total_revenue = summary.total_revenue.saturating_add(amount);
-            summary.report_count = summary.report_count.saturating_add(1);
-            env.storage().persistent().set(&summary_key, &summary);
         }
 
         Ok(())
@@ -1708,15 +1698,6 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
-
-        if !Self::is_event_only(&env) {
-            let key = DataKey::Blacklist(offering_id.clone());
-            let mut map: Map<Address, bool> =
-                env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
-
-            map.set(investor.clone(), true);
-            env.storage().persistent().set(&key, &map);
-        }
         // Verify auth: caller must be issuer or admin
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
@@ -2998,9 +2979,89 @@ impl RevoraRevenueShare {
         (results, next_cursor)
     }
 
+    /// Shared claim-preview engine used by both full and chunked read-only views.
+    ///
+    /// Security assumptions:
+    /// - Previews must never overstate what `claim` could legally pay at the current ledger state.
+    /// - Callers may provide stale or adversarial cursors, so we clamp to the holder's current
+    ///   `LastClaimedIdx` before iterating.
+    /// - The first delayed period forms a hard stop because later periods are not claimable either.
+    ///
+    /// Returns `(total, next_cursor)` where `next_cursor` resumes from the first unprocessed index.
+    fn compute_claimable_preview(
+        env: &Env,
+        offering_id: &OfferingId,
+        holder: &Address,
+        share_bps: u32,
+        requested_start_idx: u32,
+        count: Option<u32>,
+    ) -> (i128, Option<u32>) {
+        let count_key = DataKey::PeriodCount(offering_id.clone());
+        let period_count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+
+        let idx_key = DataKey::LastClaimedIdx(offering_id.clone(), holder.clone());
+        let holder_start_idx: u32 = env.storage().persistent().get(&idx_key).unwrap_or(0);
+        let actual_start = core::cmp::max(requested_start_idx, holder_start_idx);
+
+        if actual_start >= period_count {
+            return (0, None);
+        }
+
+        let effective_cap = count.map(|requested| {
+            if requested == 0 || requested > MAX_CHUNK_PERIODS {
+                MAX_CHUNK_PERIODS
+            } else {
+                requested
+            }
+        });
+
+        let delay_key = DataKey::ClaimDelaySecs(offering_id.clone());
+        let delay_secs: u64 = env.storage().persistent().get(&delay_key).unwrap_or(0);
+        let now = env.ledger().timestamp();
+
+        let mut total: i128 = 0;
+        let mut processed: u32 = 0;
+        let mut idx = actual_start;
+
+        while idx < period_count {
+            if let Some(cap) = effective_cap {
+                if processed >= cap {
+                    return (total, Some(idx));
+                }
+            }
+
+            let entry_key = DataKey::PeriodEntry(offering_id.clone(), idx);
+            let period_id: u64 = env.storage().persistent().get(&entry_key).unwrap_or(0);
+            if period_id == 0 {
+                idx = idx.saturating_add(1);
+                continue;
+            }
+
+            let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
+            let deposit_time: u64 = env.storage().persistent().get(&time_key).unwrap_or(0);
+            if delay_secs > 0 && now < deposit_time.saturating_add(delay_secs) {
+                return (total, Some(idx));
+            }
+
+            let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
+            let revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
+            total = total.saturating_add(Self::compute_share(
+                env.clone(),
+                revenue,
+                share_bps,
+                RoundingMode::Truncation,
+            ));
+            processed = processed.saturating_add(1);
+            idx = idx.saturating_add(1);
+        }
+
+        (total, None)
+    }
+
     /// Preview the total claimable amount for a holder without mutating state.
     ///
-    /// This method respects the per-offering claim delay and only sums periods that have passed the delay.
+    /// This method respects the same blacklist, claim-window, and claim-delay gates that can block
+    /// `claim`, then sums only periods currently eligible for payout.
     pub fn get_claimable(
         env: Env,
         issuer: Address,
@@ -3019,34 +3080,20 @@ impl RevoraRevenueShare {
             return 0;
         }
 
-        let offering_id = OfferingId { issuer, namespace, token };
-
-        let count_key = DataKey::PeriodCount(offering_id.clone());
-        let period_count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-
-        let idx_key = DataKey::LastClaimedIdx(offering_id.clone(), holder.clone());
-        let start_idx: u32 = env.storage().persistent().get(&idx_key).unwrap_or(0);
-
-        let delay_key = DataKey::ClaimDelaySecs(offering_id.clone());
-        let delay_secs: u64 = env.storage().persistent().get(&delay_key).unwrap_or(0);
-        let now = env.ledger().timestamp();
-
-        let mut total: i128 = 0;
-        for i in start_idx..period_count {
-            let entry_key = DataKey::PeriodEntry(offering_id.clone(), i);
-            let period_id: u64 = env.storage().persistent().get(&entry_key).unwrap_or(0);
-            if period_id == 0 {
-                continue;
-            }
-            let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
-            let deposit_time: u64 = env.storage().persistent().get(&time_key).unwrap_or(0);
-            if delay_secs > 0 && now < deposit_time.saturating_add(delay_secs) {
-                break;
-            }
-            let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-            let revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
-            total += revenue * (share_bps as i128) / 10_000;
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        if Self::is_blacklisted(env.clone(), issuer, namespace, token, holder.clone()) {
+            return 0;
         }
+        if Self::require_claim_window_open(&env, &offering_id).is_err() {
+            return 0;
+        }
+
+        let (total, _) =
+            Self::compute_claimable_preview(&env, &offering_id, &holder, share_bps, 0, None);
         total
     }
 
@@ -3074,48 +3121,26 @@ impl RevoraRevenueShare {
             return (0, None);
         }
 
-        let offering_id = OfferingId { issuer, namespace, token };
-
-        let count_key = DataKey::PeriodCount(offering_id.clone());
-        let period_count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-
-        if start_idx >= period_count {
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        if Self::is_blacklisted(env.clone(), issuer, namespace, token, holder.clone()) {
+            return (0, None);
+        }
+        if Self::require_claim_window_open(&env, &offering_id).is_err() {
             return (0, None);
         }
 
-        let cap = if count == 0 || count > MAX_CHUNK_PERIODS { MAX_CHUNK_PERIODS } else { count };
-
-        let delay_key = DataKey::ClaimDelaySecs(offering_id.clone());
-        let delay_secs: u64 = env.storage().persistent().get(&delay_key).unwrap_or(0);
-        let now = env.ledger().timestamp();
-
-        let mut total: i128 = 0;
-        let mut processed: u32 = 0;
-        let mut idx = start_idx;
-
-        while idx < period_count {
-            if processed >= cap {
-                return (total, Some(idx));
-            }
-            let entry_key = DataKey::PeriodEntry(offering_id.clone(), idx);
-            let period_id: u64 = env.storage().persistent().get(&entry_key).unwrap_or(0);
-            if period_id == 0 {
-                idx = idx.saturating_add(1);
-                continue;
-            }
-            let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
-            let deposit_time: u64 = env.storage().persistent().get(&time_key).unwrap_or(0);
-            if delay_secs > 0 && now < deposit_time.saturating_add(delay_secs) {
-                return (total, Some(idx));
-            }
-            let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-            let revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
-            total += revenue * (share_bps as i128) / 10_000;
-            processed = processed.saturating_add(1);
-            idx = idx.saturating_add(1);
-        }
-
-        (total, None)
+        Self::compute_claimable_preview(
+            &env,
+            &offering_id,
+            &holder,
+            share_bps,
+            start_idx,
+            Some(count),
+        )
     }
 
     // ── Time-delayed claim configuration (#27) ──────────────────
@@ -3200,6 +3225,21 @@ impl RevoraRevenueShare {
         let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
         let new_deposited = deposited.saturating_add(amount);
         env.storage().persistent().set(&deposited_key, &new_deposited);
+    }
+
+    /// Test helper: set a holder's claim cursor without performing token transfers.
+    #[cfg(test)]
+    pub fn test_set_last_claimed_idx(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        holder: Address,
+        last_claimed_idx: u32,
+    ) {
+        let offering_id = OfferingId { issuer, namespace, token };
+        let idx_key = DataKey::LastClaimedIdx(offering_id, holder);
+        env.storage().persistent().set(&idx_key, &last_claimed_idx);
     }
 
     // ── On-chain distribution simulation (#29) ────────────────────
